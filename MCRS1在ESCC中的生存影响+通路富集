@@ -1,0 +1,39 @@
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(tibble)
+library(survival)
+library(survminer)
+###读取肿瘤的临床信息
+esca.phe=fread("TCGA-ESCA.GDC_phenotype.tsv.gz",header = T, sep = '\t',data.table = F)
+###########提取肿瘤和癌旁组织的样本序号
+esca.phe.t=filter(esca.phe,sample_type.samples=="Primary Tumor")
+esca.phe.n=filter(esca.phe,sample_type.samples=="Solid Tissue Normal")
+######读取表达谱信息  rnaseq的数据
+esca.count=fread("TCGA-ESCA.htseq_counts.tsv.gz",header = T, sep = '\t',data.table = F)
+esca.pro=fread("gencode.v22.annotation.gene.probeMap",header = T, sep = '\t',data.table = F)
+#######前两列就是ID和gene
+esca.pro=esca.pro[,c(1,2)]
+esca.count=merge(esca.pro,esca.count,by.y ="Ensembl_ID",by.x = "id" )
+#########重复基因去重
+esca.count.1 <- aggregate(esca.count[,-c(1,2)], list(esca.count$gene), FUN=sum)
+esca.count.1 <- column_to_rownames(esca.count.1,"Group.1")
+###########提取鳞状上皮癌的样本序号，提取鳞癌的表达量情况
+escc.phe=filter(esca.phe.t,disease_type=="Squamous Cell Neoplasms")
+escc.count <- intersect(escc.phe$submitter_id.samples,colnames(esca.count.1)) %>% 
+  esca.count.1[,.]
+rm(esca.count,esca.count.1)
+##########读取生存数据
+survdata=fread("TCGA-ESCA.survival.tsv",data.table = F)
+#########构建MCRS1和生存数据的dataset
+data=merge(t(escc.count["MCRS1",]),survdata,by.x=0,by.y=1) 
+data=column_to_rownames(data,"Row.names")
+data <- surv_cutpoint(data,
+                         time = 'OS.time',
+                         event = 'OS',
+                         variables = c('MCRS1')) %>% 
+  surv_categorize()##按照截点分类数据
+data$MCRS1exp= ifelse(data$MCRS1=="high",'2','1') %>% as.numeric()
+##########画生存曲线
+fit=survfit(Surv(OS.time,OS)~MCRS1,data = data)
+ggsurvplot(fit,size=2,risk.table = T,pval = T,legend=c(0.8,0.8),data = data)
