@@ -1,39 +1,92 @@
+setwd("E:/xianyujie/TCGA.count")
+load(".RData")
+
+
 library(data.table)
 library(dplyr)
 library(tidyverse)
 library(tibble)
 library(survival)
 library(survminer)
-###读取肿瘤的临床信息
+library(IOBR)
+
+#########导出相关性矩阵
+flattenCorrMatrix <- function(cormat, pmat) {
+  # 提取上三角部分的行和列索引，排除对角线
+  ut <- upper.tri(cormat)
+  ut <- ut[!diag(ut)]  # 排除对角线上的元素
+  
+  # 使用 rownames 来获取对应的行名和列名
+  row_names <- rownames(cormat)[row(cormat)[ut]]
+  col_names <- rownames(cormat)[col(cormat)[ut]]
+  
+  # 创建一个新的数据框，包含行名、列名、相关系数和 p 值
+  corr_data_frame <- data.frame(
+    row = row_names,
+    column = col_names,
+    cor = cormat[ut],
+    p = pmat[ut],
+    stringsAsFactors = FALSE  # 避免将字符向量转换为因子
+  )
+  
+  # 返回数据框
+  return(corr_data_frame)
+}
+
+#########1.数据处理
+###1.1读取肿瘤的临床信息
 esca.phe=fread("TCGA-ESCA.GDC_phenotype.tsv.gz",header = T, sep = '\t',data.table = F)
-###########提取肿瘤和癌旁组织的样本序号
+###########1.2提取肿瘤和癌旁组织的样本序号
 esca.phe.t=filter(esca.phe,sample_type.samples=="Primary Tumor")
 esca.phe.n=filter(esca.phe,sample_type.samples=="Solid Tissue Normal")
-######读取表达谱信息  rnaseq的数据
+######1.3本地读取表达谱信息  rnaseq的数据,count转换为TPM
 esca.count=fread("TCGA-ESCA.htseq_counts.tsv.gz",header = T, sep = '\t',data.table = F)
-esca.pro=fread("gencode.v22.annotation.gene.probeMap",header = T, sep = '\t',data.table = F)
-#######前两列就是ID和gene
-esca.pro=esca.pro[,c(1,2)]
-esca.count=merge(esca.pro,esca.count,by.y ="Ensembl_ID",by.x = "id" )
-#########重复基因去重
-esca.count.1 <- aggregate(esca.count[,-c(1,2)], list(esca.count$gene), FUN=sum)
-esca.count.1 <- column_to_rownames(esca.count.1,"Group.1")
-###########提取鳞状上皮癌的样本序号，提取鳞癌的表达量情况
+esca.count <- column_to_rownames(esca.count,"Ensembl_ID")
+esca.count <-(2^esca.count)+1
+esca.count <- count2tpm(countMat = esca.count, 
+                        source = "local", 
+                        idType = "ensembl")######count转TPM
+###########1.4提取鳞状上皮癌的样本序号，提取鳞癌的表达量情况
 escc.phe=filter(esca.phe.t,disease_type=="Squamous Cell Neoplasms")
-escc.count <- intersect(escc.phe$submitter_id.samples,colnames(esca.count.1)) %>% 
-  esca.count.1[,.]
-rm(esca.count,esca.count.1)
-##########读取生存数据
+escc.count <- intersect(escc.phe$submitter_id.samples,colnames(esca.count)) %>% 
+  esca.count[,.]
+rm(esca.count)
+##########1.5读取生存数据
 survdata=fread("TCGA-ESCA.survival.tsv",data.table = F)
-#########构建MCRS1和生存数据的dataset
+#########1.6构建MCRS1和生存数据的dataset
 data=merge(t(escc.count["MCRS1",]),survdata,by.x=0,by.y=1) 
 data=column_to_rownames(data,"Row.names")
+##1.6.1根据截点分数据
 data <- surv_cutpoint(data,
                          time = 'OS.time',
                          event = 'OS',
                          variables = c('MCRS1')) %>% 
   surv_categorize()##按照截点分类数据
 data$MCRS1exp= ifelse(data$MCRS1=="high",'2','1') %>% as.numeric()
-##########画生存曲线
+##1.6.2根据中位数
+##########2.画生存曲线
 fit=survfit(Surv(OS.time,OS)~MCRS1,data = data)
 ggsurvplot(fit,size=2,risk.table = T,pval = T,legend=c(0.8,0.8),data = data)
+##########3.对高低两组分别进行enrichment，去看可能影响的通路，探究一下后续机制
+#####在这个地方我想知道基因表达高低和免疫细胞/信号通路的的关系
+########4.MCRS1和FAK/BCL2的相关性
+library(Hmisc)
+library(ggplot2)
+library(ggpubr)
+library(ggpmisc)
+data=t(escc.count[c("MCRS1","PTK2","BCL2","BCL2L1"),])
+cor_matrix <- rcorr(as.matrix(data),type = "spearman")
+cor_matrix=flattenCorrMatrix(cor_matrix$r,cor_matrix$P)
+##visualization
+p=ggscatter(data, x = "MCRS1", y = "BCL2",
+          color = "#2878B5", # 设置散点的颜色
+          size = 2.5,
+          add = "reg.line", # 添加线性拟合线
+          conf.int = TRUE, # 添加置信区间
+          add.params = list(color = "#C82423", fill = "#F8AC8C",size=1.5)) + # 设置拟合线和置信区间填充的颜色和宽度
+  stat_cor(method = "pearson", 
+           label.x = 85, label.y = 40,###标签的位置
+           color = "black", # 设置相关系数标签的颜色
+           size = 5) # 设置相关系数标签的大小
+ggsave("MCRS1和BCL2相关散点图.tiff", p, width = 9, height = 5, dpi = 300)
+
