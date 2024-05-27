@@ -1,0 +1,18 @@
+library(drc)
+
+# 有一组剂量和相应的反应数据
+data=read.csv("药物浓度.csv")
+colnames(data)=c("dose","response")
+plot(response ~ dose, data = data, main="Original Dose Scale")
+plot(response ~ log(dose+.1), data = data, main="Logarithmic Dose Scale")
+fit<- drm(response ~ dose, data = data, 
+                   fct = llogistic())
+##########可视化
+plot(fit, broken=TRUE,
+     xlab="Concentration ", ylab="positive(%)")
+plot(fit, broken=TRUE, bty="l",
+     xlab="Concentration ", ylab="positive(%)",type="all")
+fit
+# 假设您想要的有效率是80%（0.8）
+## Calculating EC/ED values
+ED(fit, c(5,30,40,50,60,70,80,90))
