@@ -1,7 +1,3 @@
-setwd("E:/xianyujie/TCGA.count")
-load(".RData")
-
-
 library(data.table)
 library(dplyr)
 library(tidyverse)
@@ -69,6 +65,18 @@ fit=survfit(Surv(OS.time,OS)~MCRS1,data = data)
 ggsurvplot(fit,size=2,risk.table = T,pval = T,legend=c(0.8,0.8),data = data)
 ##########3.对高低两组分别进行enrichment，去看可能影响的通路，探究一下后续机制
 #####在这个地方我想知道基因表达高低和免疫细胞/信号通路的的关系
+########3免疫浸润
+escc.order=t(escc.count) %>% as.data.frame() %>% arrange(MCRS1)#先按照MCRS1从低到高排列所有数据  
+grouplist=c(rep("low",40),rep("high",41))
+###3.1cibersort
+cibersort.res <- deconvo_tme(eset = escc.order,
+                             method = "cibersort")
+###3.2xCELL
+xcell.res <- deconvo_tme(eset = t(escc.order),
+                             method = "xcell")
+###estimate
+estimate=deconvo_tme(eset = t(escc.order),
+                     method = "estimate")
 ########4.MCRS1和FAK/BCL2的相关性
 library(Hmisc)
 library(ggplot2)
