@@ -29,6 +29,8 @@ flattenCorrMatrix <- function(cormat, pmat) {
   return(corr_data_frame)
 }
 
+
+
 #########1.数据处理
 ###1.1读取肿瘤的临床信息
 esca.phe=fread("TCGA-ESCA.GDC_phenotype.tsv.gz",header = T, sep = '\t',data.table = F)
@@ -63,28 +65,71 @@ data$MCRS1exp= ifelse(data$MCRS1=="high",'2','1') %>% as.numeric()
 ##########2.画生存曲线
 fit=survfit(Surv(OS.time,OS)~MCRS1,data = data)
 ggsurvplot(fit,size=2,risk.table = T,pval = T,legend=c(0.8,0.8),data = data)
+
+
 ##########3.对高低两组分别进行enrichment，去看可能影响的通路，探究一下后续机制
 #####在这个地方我想知道基因表达高低和免疫细胞/信号通路的的关系
-########3免疫浸润
+########3.1免疫浸润
 escc.order=t(escc.count) %>% as.data.frame() %>% arrange(MCRS1)#先按照MCRS1从低到高排列所有数据  
 grouplist=c(rep("low",40),rep("high",41))
-###3.1cibersort
-cibersort.res <- deconvo_tme(eset = escc.order,
+###3.1.1cibersort
+cibersort.res <- deconvo_tme(eset = t(escc.order),
                              method = "cibersort")
-###3.2xCELL
+###3.1.2xCELL
 xcell.res <- deconvo_tme(eset = t(escc.order),
                              method = "xcell")
-###estimate
+###3.1.3estimate
 estimate=deconvo_tme(eset = t(escc.order),
                      method = "estimate")
-########4.MCRS1和FAK/BCL2的相关性
+###3.1.4ssGSEA
+# 总的signature
+signature_collection
+# 代谢相关signature
+signature_metabolism
+# 微环境相关
+signature_tme
+# 肿瘤相关
+signature_tme
+load(file = "ssGSEA28.Rdata")
+ssgsea.res <- calculate_sig_score(eset = t(escc.order)
+                                 , signature = cellMarker 
+                                 , method = "ssgsea" )
+#########3.2免疫细胞和分子之间的相关性
+###汇总数据，做一个矩阵出来
 library(Hmisc)
 library(ggplot2)
 library(ggpubr)
 library(ggpmisc)
+data=merge(ssgsea.res,t(escc.count[c("MCRS1","PTK2","ALK","ROS1"),]),
+           by.x =1,by.y = 0 )
+data=column_to_rownames(data,"ID")
+cor_matrix <- rcorr(as.matrix(data),type = "spearman")
+cor_matrix=flattenCorrMatrix(cor_matrix$r,cor_matrix$P)%>% 
+  filter(column %in%c("MCRS1","PTK2","ALK","ROS1")) %>% 
+  filter(!row %in%c("MCRS1","PTK2","ALK","ROS1"))
+###visualization(相关性热图)
+cor_matrix=mutate(cor_matrix,sta = case_when(
+  p < 0.001 ~ "***",
+  p < 0.01 ~ "**",
+  p < 0.05 ~ "*",
+  TRUE ~ ""))
+ggplot(cor_matrix, aes(row,column))+
+  geom_tile(aes(fill=cor))+
+  geom_text(aes(label=sta), color="black", size=4)+
+  scale_fill_gradient2(low='#2878B5', high='#C82423',mid = 'white',
+                       limit=c(-0.5,0.5),name="Correlation")+
+  labs(x=NULL,y=NULL)+
+  theme(axis.text.x = element_text(size=8,angle = 45,hjust = 1,color = "black"),
+        axis.text.y = element_text(size=8,color = "black"),
+        axis.ticks.y = element_blank(),
+        panel.background=element_blank())
+
+
+
+########4.MCRS1和FAK/BCL2的相关性
 data=t(escc.count[c("MCRS1","PTK2","BCL2","BCL2L1"),])
 cor_matrix <- rcorr(as.matrix(data),type = "spearman")
-cor_matrix=flattenCorrMatrix(cor_matrix$r,cor_matrix$P)
+cor_matrix=flattenCorrMatrix(cor_matrix$r,cor_matrix$P) 
 ##visualization
 p=ggscatter(data, x = "MCRS1", y = "BCL2",
           color = "#2878B5", # 设置散点的颜色
