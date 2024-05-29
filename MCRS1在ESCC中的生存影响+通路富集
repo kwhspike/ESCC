@@ -71,7 +71,6 @@ ggsurvplot(fit,size=2,risk.table = T,pval = T,legend=c(0.8,0.8),data = data)
 #####在这个地方我想知道基因表达高低和免疫细胞/信号通路的的关系
 ########3.1免疫浸润
 escc.order=t(escc.count) %>% as.data.frame() %>% arrange(MCRS1)#先按照MCRS1从低到高排列所有数据  
-grouplist=c(rep("low",40),rep("high",41))
 ###3.1.1cibersort
 cibersort.res <- deconvo_tme(eset = t(escc.order),
                              method = "cibersort")
@@ -94,7 +93,7 @@ load(file = "ssGSEA28.Rdata")
 ssgsea.res <- calculate_sig_score(eset = t(escc.order)
                                  , signature = cellMarker 
                                  , method = "ssgsea" )
-#########3.2免疫细胞和分子之间的相关性
+#########3.2免疫细胞和分子之间的相关性(ssGSEA)
 ###汇总数据，做一个矩阵出来
 library(Hmisc)
 library(ggplot2)
@@ -108,12 +107,13 @@ cor_matrix=flattenCorrMatrix(cor_matrix$r,cor_matrix$P)%>%
   filter(column %in%c("MCRS1","PTK2","ALK","ROS1")) %>% 
   filter(!row %in%c("MCRS1","PTK2","ALK","ROS1"))
 ###visualization(相关性热图)
+###ssGSEA
 cor_matrix=mutate(cor_matrix,sta = case_when(
   p < 0.001 ~ "***",
   p < 0.01 ~ "**",
   p < 0.05 ~ "*",
   TRUE ~ ""))
-ggplot(cor_matrix, aes(row,column))+
+p=ggplot(cor_matrix, aes(row,column))+
   geom_tile(aes(fill=cor))+
   geom_text(aes(label=sta), color="black", size=4)+
   scale_fill_gradient2(low='#2878B5', high='#C82423',mid = 'white',
@@ -123,8 +123,38 @@ ggplot(cor_matrix, aes(row,column))+
         axis.text.y = element_text(size=8,color = "black"),
         axis.ticks.y = element_blank(),
         panel.background=element_blank())
+ggsave("MCRS1_FAK_ALK_ROS1和免疫浸润1.tiff", p, width = 9, height = 5, dpi = 300)
 
-
+####分组进行比较
+###画箱线图
+library(reshape2)
+data$id=rownames(data)
+data$group=c(rep("low",40),rep("high",41))
+data=arrange(data,PTK2)
+data=data[,-c(29:32)]%>%reshape2::melt(.)
+colnames(data)=c("Sample","Group","Celltype","Composition")  
+p=ggboxplot(
+  data,
+  x = "Celltype",
+  y = "Composition",
+  color = "black",
+  fill = "Group",
+  xlab = "",
+  ylab = "Cell composition",
+  title = "Cell composition between two group"
+) +
+  stat_compare_means(
+    aes(group = Group),
+    label = "p.signif", 
+    method = "wilcox.test",
+    hide.ns = T,
+    size = 4.5
+  ) +
+  theme(axis.text.x = element_text(
+    angle = 45,
+    hjust = 1,
+    vjust = 1
+  ))
 
 ########4.MCRS1和FAK/BCL2的相关性
 data=t(escc.count[c("MCRS1","PTK2","BCL2","BCL2L1"),])
