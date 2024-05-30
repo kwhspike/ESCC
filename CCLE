@@ -1,0 +1,21 @@
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(tibble)
+# 读取表达信息文件
+expdata <- data.table::fread("OmicsExpressionAllGenesTPMLogp1Profile.csv", 
+                       header = TRUE) 
+#读取样本编号文件
+profile=fread("OmicsProfiles.csv",header = T)
+
+sample=fread("Model.csv", 
+                  header = TRUE)
+unique(sample$OncotreePrimaryDisease)
+sample=sample %>% filter(OncotreeLineage=="Esophagus/Stomach") %>% 
+  filter(OncotreeCode=="ESCC")
+####把ESCC的提取出来
+expdata=merge(profile,expdata,by.x = "ProfileID",by.y="V1")
+expdata=merge(sample[,c(1,3)],expdata,"ModelID") 
+# 提取行名括号内的内容（EntrezID）
+colnames(expdata) <- gsub(".*\\((ENSG\\w+)\\).*", "\\1", colnames(expdata))
+MCRS1=expdata[,c("CellLineName","ENSG00000182778")]
