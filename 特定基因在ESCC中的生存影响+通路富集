@@ -51,26 +51,26 @@ escc.count <- intersect(escc.phe$submitter_id.samples,colnames(esca.count)) %>%
 rm(esca.count)
 ##########1.5读取生存数据
 survdata=fread("TCGA-ESCA.survival.tsv",data.table = F)
-#########1.6构建MCRS1和生存数据的dataset
-data=merge(t(escc.count["MCRS1",]),survdata,by.x=0,by.y=1) 
+#########1.6构建gene1和生存数据的dataset
+data=merge(t(escc.count["gene1",]),survdata,by.x=0,by.y=1) 
 data=column_to_rownames(data,"Row.names")
 ##1.6.1根据截点分数据
 data <- surv_cutpoint(data,
                          time = 'OS.time',
                          event = 'OS',
-                         variables = c('MCRS1')) %>% 
+                         variables = c('gene1')) %>% 
   surv_categorize()##按照截点分类数据
-data$MCRS1exp= ifelse(data$MCRS1=="high",'2','1') %>% as.numeric()
+data$gene1exp= ifelse(data$gene1=="high",'2','1') %>% as.numeric()
 ##1.6.2根据中位数
 ##########2.画生存曲线
-fit=survfit(Surv(OS.time,OS)~MCRS1,data = data)
+fit=survfit(Surv(OS.time,OS)~gene1,data = data)
 ggsurvplot(fit,size=2,risk.table = T,pval = T,legend=c(0.8,0.8),data = data)
 
 
 ##########3.对高低两组分别进行enrichment，去看可能影响的通路，探究一下后续机制
 #####在这个地方我想知道基因表达高低和免疫细胞/信号通路的的关系
 ########3.1免疫浸润
-escc.order=t(escc.count) %>% as.data.frame() %>% arrange(MCRS1)#先按照MCRS1从低到高排列所有数据  
+escc.order=t(escc.count) %>% as.data.frame() %>% arrange(gene1)#先按照gene1从低到高排列所有数据  
 ###3.1.1cibersort
 cibersort.res <- deconvo_tme(eset = t(escc.order),
                              method = "cibersort")
@@ -99,13 +99,13 @@ library(Hmisc)
 library(ggplot2)
 library(ggpubr)
 library(ggpmisc)
-data=merge(ssgsea.res,t(escc.count[c("MCRS1","PTK2","ALK","ROS1"),]),
+data=merge(ssgsea.res,t(escc.count[c("gene1","gene3","gene4","gene5"),]),
            by.x =1,by.y = 0 )
 data=column_to_rownames(data,"ID")
 cor_matrix <- rcorr(as.matrix(data),type = "spearman")
 cor_matrix=flattenCorrMatrix(cor_matrix$r,cor_matrix$P)%>% 
-  filter(column %in%c("MCRS1","PTK2","ALK","ROS1")) %>% 
-  filter(!row %in%c("MCRS1","PTK2","ALK","ROS1"))
+  filter(column %in%c("gene1","gene3","gene4","gene5")) %>% 
+  filter(!row %in%c("gene1","gene3","gene4","gene5"))
 ###visualization(相关性热图)
 ###ssGSEA
 cor_matrix=mutate(cor_matrix,sta = case_when(
@@ -123,14 +123,14 @@ p=ggplot(cor_matrix, aes(row,column))+
         axis.text.y = element_text(size=8,color = "black"),
         axis.ticks.y = element_blank(),
         panel.background=element_blank())
-ggsave("MCRS1_FAK_ALK_ROS1和免疫浸润1.tiff", p, width = 9, height = 5, dpi = 300)
+ggsave("gene1_gene3_gene4_gene5和免疫浸润1.tiff", p, width = 9, height = 5, dpi = 300)
 
 ####分组进行比较
 ###画箱线图
 library(reshape2)
 data$id=rownames(data)
 data$group=c(rep("low",40),rep("high",41))
-data=arrange(data,PTK2)
+data=arrange(data,gene3)
 data=data[,-c(29:32)]%>%reshape2::melt(.)
 colnames(data)=c("Sample","Group","Celltype","Composition")  
 p=ggboxplot(
@@ -156,12 +156,12 @@ p=ggboxplot(
     vjust = 1
   ))
 
-########4.MCRS1和FAK/BCL2的相关性
-data=t(escc.count[c("MCRS1","PTK2","BCL2","BCL2L1"),])
+########4.gene1和gene3/gene2的相关性
+data=t(escc.count[c("gene1","gene3","gene2","gene2L1"),])
 cor_matrix <- rcorr(as.matrix(data),type = "spearman")
 cor_matrix=flattenCorrMatrix(cor_matrix$r,cor_matrix$P) 
 ##visualization
-p=ggscatter(data, x = "MCRS1", y = "BCL2",
+p=ggscatter(data, x = "gene1", y = "gene2",
           color = "#2878B5", # 设置散点的颜色
           size = 2.5,
           add = "reg.line", # 添加线性拟合线
@@ -171,5 +171,5 @@ p=ggscatter(data, x = "MCRS1", y = "BCL2",
            label.x = 85, label.y = 40,###标签的位置
            color = "black", # 设置相关系数标签的颜色
            size = 5) # 设置相关系数标签的大小
-ggsave("MCRS1和BCL2相关散点图.tiff", p, width = 9, height = 5, dpi = 300)
+ggsave("gene1和gene2相关散点图.tiff", p, width = 9, height = 5, dpi = 300)
 
