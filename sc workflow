@@ -1,0 +1,195 @@
+library(Seurat)
+library(stringr)
+
+library(clustree)
+library(dplyr)
+library(GSVA)
+library(msigdbr)
+library(GSEABase)
+library(pheatmap)
+library(harmony)
+library(ggplot2)
+library(future)
+
+setwd("G:/单细胞学习/ESCC")
+plan("multicore", workers = 6)#####并行
+options(future.globals.maxSize = 6e9) # 3 GiB的全局变量
+filename <- paste('GSE196756_RAW/',
+                  list.files('GSE196756_RAW/'),sep = '')
+sceList <- lapply(filename, function(x){
+  obj <- CreateSeuratObject(counts = Read10X(x),
+                            project = str_split(x,'/')[[1]][2])
+})
+names(sceList) <- list.files('GSE196756_RAW/')
+############把读取的list合并
+sce <- merge(sceList[[1]],sceList[-1],add.cell.ids = names(sceList),project='ESCC')
+rm(sceList,filename)
+
+#查看线粒体(MT开头)、核糖体(RPS/RPL开头)基因占比
+grep('^MT',x=rownames(sce@assays$RNA),value = T)
+grep('^RP[SL]',x=rownames(sce@assays$RNA),value = T)
+#########计算线粒体、核糖体基因的百分比
+sce <- PercentageFeatureSet(sce,pattern = '^MT',col.name = 'percent.MT')
+sce <- PercentageFeatureSet(sce,pattern = '^RP[SL]',col.name = 'percent.RP')
+#####画小提琴图（没用）
+#VlnPlot(sce,features = 'percent.MT',pt.size = 0)
+#VlnPlot(sce,features = 'percent.RP',pt.size = 0)
+#VlnPlot(sce,features = 'nCount_RNA',pt.size = 0)
+#VlnPlot(sce,features = 'nFeature_RNA',pt.size = 0)
+
+# 过滤细胞
+sce <- subset(sce,subset = nFeature_RNA<6000 & nFeature_RNA>200 & percent.MT<20)
+dim(sce) # 38224个gene， 29389个cell
+# 过滤gene
+#sce <- sce[rowSums(sce@assays$RNA@counts>0)>3,]
+#dim(sce) # 28074个gene， 29389个cell
+
+#数据标准化
+#1.直接标准化
+
+sce <- NormalizeData(sce, normalization.method = "LogNormalize", scale.factor = 10000)
+sce <- FindVariableFeatures(sce, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(sce)
+sce <- ScaleData(sce, features = all.genes)
+#2SCTransform进行标准化
+sce <- SCTransform(sce) # 这一步包含了NormalizeData 、ScaleData、FindVariableFeatures三步
+DefaultAssay(sce)
+sce <- RunPCA(sce)
+#查看PCA结果
+print(sce[["pca"]], dims = 1:5, nfeatures = 5)
+
+VizDimLoadings(sce, dims = 1:2, reduction = "pca")
+
+DimPlot(sce, reduction = "pca")
+
+############确定最佳维度(jackstraw不能用于SCT后的数据)
+sce <- JackStraw(sce, num.replicate = 100)
+sce <- ScoreJackStraw(sce, dims = 1:20)
+JackStrawPlot(sce, dims = 1:15)
+
+######ElbowPlot降维
+ElbowPlot(sce)
+##########################################量化识别拐点
+# Determine percent of variation associated with each PC
+pct <- sce[["pca"]]@stdev / sum(sce[["pca"]]@stdev) * 100
+# Calculate cumulative percents for each PC
+cumu <- cumsum(pct)
+# Determine which PC exhibits cumulative percent greater than 90% and % variation associated with the PC as less than 5
+co1 <- which(cumu > 90 & pct < 5)[1]
+co1
+# Determine the difference between variation of PC and subsequent PC
+co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+# last point where change of % of variation is more than 0.1%.
+co2
+# Minimum of the two calculation
+pcs <- min(co1, co2)
+pcs
+# Create a dataframe with values
+plot_df <- data.frame(pct = pct, 
+                      cumu = cumu, 
+                      rank = 1:length(pct))
+
+# Elbow plot to visualize 
+ggplot(plot_df, aes(cumu, pct, label = rank, color = rank > pcs)) + 
+  geom_text() + 
+  geom_vline(xintercept = 90, color = "grey") + 
+  geom_hline(yintercept = min(pct[pct > 5]), color = "grey") +
+  theme_bw()
+
+####################发现16个维度的时候最好用
+######umap聚类
+sce <- RunUMAP(sce,reduction = 'pca',dims = 1:40)####所以维度设置成16
+sce <- FindNeighbors(sce,dims = 1:40)
+
+sce_res <- sce
+for (i in c(0.01, 0.05, 0.1, 0.15, 0.2, 0.3,0.4, 0.5,0.8,1)){
+  sce_res <- FindClusters(sce_res,resolution = i)
+}
+clustree(sce_res,prefix = 'SCT_snn_res.')
+rm(sce_res)
+sce <- FindClusters(sce,resolution = 0.2)
+DimPlot(sce,reduction = 'umap',group.by = 'seurat_clusters',label = T)
+###############tsne聚类
+sce <- RunTSNE(sce, dims = 1:16)
+DimPlot(sce,reduction = 'tsne',group.by = 'seurat_clusters',label = T)
+
+# 报错提示这一步，我也不知道原因
+sce <- PrepSCTFindMarkers(sce)
+sce=JoinLayers(sce)
+# 找出每个cluster的标记与所有剩余的细胞相比较，只报告阳性细胞
+sce.markers <- FindAllMarkers(sce, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+#min.pct：指定标记基因在细胞簇中的最低表达百分比。
+#在这里，它被设置为0.25，
+#表示只有在至少25%的细胞簇中有表达的基因才会被认为是标记基因。
+#logfc.threshold：指定用于筛选标记基因的对数折叠变化阈值。
+#在这里，它被设置为0.25，表示只有相对于其他细胞簇至少有0.25的对数折叠变化的基因才会被认为是标记基因。
+sce.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) %>% print(n=130)
+#top_n(n = 2, wt = avg_log2FC): 这个函数从每个细胞簇的标记基因中选择前5个基因，选择的依据是根据avg_log2FC列的值进行加权排序。n参数指定要选择的前几个基因，而wt参数指定用于排序的权重列。
+
+
+
+###########自动注释细胞簇
+library(SingleR)
+load("HumanPrimaryCellAtlas_hpca.se_human.RData")
+escc_for_SingleR <- GetAssayData(sce, slot="data") ##获取标准化矩阵
+escc.hesc <- SingleR(test = escc_for_SingleR, ref = hpca.se, 
+                     labels = hpca.se$label.main,sd.thresh = 0.8) #
+escc.hesc
+
+#seurat 和 singleR的table表
+table(escc.hesc$labels,meta$seurat_clusters)
+
+sce@meta.data$labels <-escc.hesc$labels
+
+print(DimPlot(sce, group.by = c("seurat_clusters", "labels"),reduction = "umap"))
+
+#手动进行细胞注释
+immune_cellmarker <- c("CD3D",'CD3E','CD2',"CD4","CD8A",#T cell
+                       'CD79A','MZB1','MS4A1','CD79B',#B cell
+                       'FOXP3',"IL32",'TNFRSF18','TNFRSF4',#Treg
+                       'IL17A','IL17F','CD40LG',#Th17
+                       'S100A8','CXCL8','SOD2','NAMPT',#Neutrophil
+                       'SEPP1','C1QA','APOE','CD14','RNASE1',#Macrophage
+                       'TPSAB1','TPSB2','CPA3','HPGDS',#Mast
+                       'HLA-DRA','HLA-DPB1','CST3','HLA-DPA1',#mDC
+                       'PTGDS','SOX4','GZMB','IRF7',#pDC
+                       'IGHA1','IGHG1',"IGHG2",#Plasma
+                       'KLRF1','KLRD1','XCL2','XCL1',#NK
+                       'PECAM1','CLDN5',#####内皮细胞
+                       'FGF7','MME','DCN','LUM','GSN','PF4','PPBP',###成纤维细胞
+                       'TREM2','ITGAX','CD80','CD86',#######M1
+                       'IL1B','CD163','MRC1'#####M2
+)
+library(ggplot2)
+DotPlot(sce, features = immune_cellmarker)+
+  theme_bw()+
+  theme(panel.grid = element_blank(), axis.text.x=element_text(hjust = 1,vjust=0.5,angle=90))+
+  labs(x=NULL,y=NULL)+guides(size=guide_legend(order=3))+
+  scale_color_gradientn(values = seq(0,1,0.2),colours = c('#330066','#336699','#66CC66','#FFCC33'))
+
+sce <- subset(sce, idents = c("6","8"), invert = TRUE)#####把6，8群标签关掉
+new.cluster.ids <- c("0"="Macrophage",
+                     "1"="	T cell", 
+                     "2"="B cell", 
+                     "4"="Neutrophil", 
+                     "3"="Plasma cell", 
+                     "5"="Plasma cell", 
+                     "7"="Neutrophil", 
+                     "9"="mDC", 
+                     "10"="pDC",
+                     "11"="fibroblast",
+                     "12"="Mast cell"
+)
+sce <- RenameIdents(sce, new.cluster.ids)
+sce$celltype <- sce@active.ident
+DimPlot(sce, label = T,group.by = "celltype",pt.size = 0.5,split.by ='group')
+###########我想给样本分组去呈现
+table(sce$orig.ident)########这里我是手算的，seurat包还没搞明白
+
+Idents(sce, cells = 1:10937) <- 'Tumor'
+Idents(sce, cells = 10938:15828) <- 'Adjacent'
+sce$group=c(rep('Tumor',10937),rep('Adjacent',4890))
+#################
+#画SLC4A4在细胞中的分布
+VlnPlot(sce,features = c("MCRS1","TREM2","C1QC","S100A8","CD3E","CD19",
+                         "CD8A","MS4A1"),group.by = "celltype")
